@@ -174,7 +174,7 @@ Full hardware integration was not completed. The software and simulation are the
 └── LICENSE
 ```
 
-Links: [Simulator](robotic_arm_6dof.html) · [Project report (PDF)](docs/Gesture-Controlled_Robotic_Arm_using_Inverse_Kinematics.pdf) · [Presentation](docs/PPT.pptx)
+Links: [Simulator](robotic_arm_6dof.html) · [Project report (PDF)](Gesture-Controlled_Robotic_Arm_using_Inverse_Kinematics.pdf) · [Presentation](PPT.pptx)
 
 ## Team
 
