@@ -1,0 +1,1036 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>6-DOF Industrial Robot — PBR Simulation</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@300;400;600&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --accent:   #00c8ff;
+    --accent2:  #ff6a00;
+    --danger:   #ff3b3b;
+    --ok:       #00ff9d;
+    --bg:       #080a0e;
+    --panel:    rgba(8,12,20,0.82);
+    --border:   rgba(0,200,255,0.18);
+    --mono:     'Share Tech Mono', monospace;
+    --ui:       'Rajdhani', sans-serif;
+  }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg);
+    overflow: hidden;
+    font-family: var(--mono);
+    color: #c8d8e8;
+  }
+
+  #canvas-wrap {
+    position: absolute; inset: 0;
+  }
+
+  canvas { display: block; width: 100% !important; height: 100% !important; }
+
+  /* ── SCANLINE overlay ── */
+  #canvas-wrap::after {
+    content: '';
+    position: absolute; inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.06) 2px,
+      rgba(0,0,0,0.06) 4px
+    );
+    pointer-events: none;
+  }
+
+  /* ── HUD panels ── */
+  .panel {
+    position: absolute;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border-radius: 2px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+  }
+
+  /* corner brackets */
+  .panel::before, .panel::after {
+    content: '';
+    position: absolute;
+    width: 10px; height: 10px;
+    border-color: var(--accent);
+    border-style: solid;
+    pointer-events: none;
+  }
+  .panel::before { top: -1px; left: -1px; border-width: 1px 0 0 1px; }
+  .panel::after  { bottom: -1px; right: -1px; border-width: 0 1px 1px 0; }
+
+  /* ── LEFT panel: joint readouts ── */
+  #panel-joints {
+    top: 24px; left: 24px;
+    width: 248px;
+    padding: 16px;
+  }
+
+  .panel-title {
+    font-family: var(--ui);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    color: var(--accent);
+    text-transform: uppercase;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .panel-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, var(--accent) 0%, transparent 100%);
+    opacity: 0.4;
+  }
+
+  .joint-row {
+    display: grid;
+    grid-template-columns: 70px 1fr 46px;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .joint-label {
+    font-family: var(--ui);
+    font-weight: 600;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    color: #6a8aa0;
+  }
+  .joint-bar-wrap {
+    height: 4px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 2px;
+    overflow: visible;
+    position: relative;
+  }
+  .joint-bar {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.06s linear, background 0.2s;
+    position: relative;
+  }
+  .joint-bar::after {
+    content: '';
+    position: absolute;
+    right: -1px; top: -2px;
+    width: 2px; height: 8px;
+    background: inherit;
+    border-radius: 1px;
+    opacity: 0.7;
+  }
+  .joint-val {
+    text-align: right;
+    font-size: 11px;
+    color: #c8d8e8;
+    transition: color 0.2s;
+    font-variant-numeric: tabular-nums;
+  }
+  .joint-val.warn { color: var(--accent2); }
+  .joint-val.limit { color: var(--danger); }
+
+  /* ── RIGHT panel: EE + step ── */
+  #panel-ee {
+    top: 24px; right: 24px;
+    width: 210px;
+    padding: 16px;
+  }
+
+  .ee-coord {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+  }
+  .ee-coord:last-of-type { border-bottom: none; }
+  .ee-axis {
+    font-family: var(--ui);
+    font-weight: 600;
+    font-size: 12px;
+    letter-spacing: 0.1em;
+  }
+  .ax-x { color: #ff5555; }
+  .ax-y { color: #55ff88; }
+  .ax-z { color: #55aaff; }
+  .ee-num {
+    font-size: 14px;
+    color: #e0eeff;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--border), transparent);
+    margin: 12px 0;
+  }
+
+  .step-display {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .step-label {
+    font-family: var(--ui);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    color: #6a8aa0;
+    text-transform: uppercase;
+  }
+  .step-val {
+    font-size: 18px;
+    color: var(--accent);
+    letter-spacing: -0.02em;
+  }
+  .step-hint {
+    font-size: 9px;
+    color: #3a5060;
+    margin-top: 4px;
+    letter-spacing: 0.06em;
+  }
+
+  /* ── BOTTOM panel: controls ── */
+  #panel-controls {
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 12px 20px;
+    display: flex;
+    gap: 20px;
+    align-items: center;
+    white-space: nowrap;
+  }
+  .ctrl-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .ctrl-sep {
+    width: 1px; height: 28px;
+    background: var(--border);
+  }
+  .ctrl-joint {
+    font-family: var(--ui);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    color: #3a5570;
+    text-transform: uppercase;
+    margin-right: 2px;
+  }
+  .key {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px; height: 24px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-bottom: 2px solid rgba(0,0,0,0.5);
+    border-radius: 3px;
+    font-size: 10px;
+    color: #c8d8e8;
+    font-family: var(--ui);
+    font-weight: 600;
+    letter-spacing: 0;
+    transition: background 0.1s, border-color 0.1s;
+    cursor: default;
+  }
+  .key.active {
+    background: rgba(0,200,255,0.15);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .key-slash { color: #2a3a48; font-size: 9px; }
+
+  /* ── TOP center: title ── */
+  #panel-title {
+    top: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 8px 24px;
+    text-align: center;
+  }
+  .title-main {
+    font-family: var(--ui);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.28em;
+    color: var(--accent);
+    text-transform: uppercase;
+  }
+  .title-sub {
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    color: #2a4050;
+    margin-top: 2px;
+    text-transform: uppercase;
+  }
+
+  /* ── status dot ── */
+  .status-dot {
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--ok);
+    box-shadow: 0 0 6px var(--ok);
+    animation: pulse-dot 2s ease-in-out infinite;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  @keyframes pulse-dot {
+    0%,100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+
+  /* ── reset flash ── */
+  #flash {
+    position: absolute; inset: 0;
+    background: rgba(0,200,255,0.06);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.05s;
+  }
+  #flash.show { opacity: 1; }
+
+  /* ── loading screen ── */
+  #loader {
+    position: absolute; inset: 0;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    transition: opacity 0.6s;
+  }
+  #loader.fade { opacity: 0; pointer-events: none; }
+  .loader-ring {
+    width: 48px; height: 48px;
+    border: 2px solid rgba(0,200,255,0.15);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loader-text {
+    margin-top: 16px;
+    font-size: 10px;
+    letter-spacing: 0.24em;
+    color: #2a5060;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+
+<div id="loader">
+  <div class="loader-ring"></div>
+  <div class="loader-text">Initialising renderer…</div>
+</div>
+
+<div id="canvas-wrap"><canvas id="c"></canvas></div>
+<div id="flash"></div>
+
+<!-- Title -->
+<div class="panel" id="panel-title">
+  <div class="title-main">6-DOF Industrial Arm</div>
+  <div class="title-sub"><span class="status-dot"></span>PBR Simulation · Three.js</div>
+</div>
+
+<!-- Joint readouts -->
+<div class="panel" id="panel-joints">
+  <div class="panel-title">Joint angles</div>
+  <div id="joint-rows"></div>
+</div>
+
+<!-- EE position + step -->
+<div class="panel" id="panel-ee">
+  <div class="panel-title">End effector</div>
+  <div class="ee-coord"><span class="ee-axis ax-x">X</span><span class="ee-num" id="ee-x">0.000</span><span style="font-size:9px;color:#2a4050">mm</span></div>
+  <div class="ee-coord"><span class="ee-axis ax-y">Y</span><span class="ee-num" id="ee-y">0.000</span><span style="font-size:9px;color:#2a4050">mm</span></div>
+  <div class="ee-coord"><span class="ee-axis ax-z">Z</span><span class="ee-num" id="ee-z">0.000</span><span style="font-size:9px;color:#2a4050">mm</span></div>
+  <div class="divider"></div>
+  <div class="step-display">
+    <div>
+      <div class="step-label">Step size</div>
+      <div class="step-val" id="step-display">5°</div>
+      <div class="step-hint">use  +  /  −  to change</div>
+    </div>
+    <div style="font-size:28px;color:rgba(0,200,255,0.08);font-family:var(--ui);font-weight:600;letter-spacing:-0.04em">DOF<br>×6</div>
+  </div>
+</div>
+
+<!-- Controls bar -->
+<div class="panel" id="panel-controls">
+  <div class="ctrl-group"><span class="ctrl-joint">J1</span><span class="key" id="k-q">Q</span><span class="key-slash">/</span><span class="key" id="k-a">A</span></div>
+  <div class="ctrl-group"><span class="ctrl-joint">J2</span><span class="key" id="k-w">W</span><span class="key-slash">/</span><span class="key" id="k-s">S</span></div>
+  <div class="ctrl-group"><span class="ctrl-joint">J3</span><span class="key" id="k-e">E</span><span class="key-slash">/</span><span class="key" id="k-d">D</span></div>
+  <div class="ctrl-group"><span class="ctrl-joint">J4</span><span class="key" id="k-r">R</span><span class="key-slash">/</span><span class="key" id="k-f">F</span></div>
+  <div class="ctrl-group"><span class="ctrl-joint">J5</span><span class="key" id="k-t">T</span><span class="key-slash">/</span><span class="key" id="k-g">G</span></div>
+  <div class="ctrl-group"><span class="ctrl-joint">J6</span><span class="key" id="k-y">Y</span><span class="key-slash">/</span><span class="key" id="k-h">H</span></div>
+  <div class="ctrl-sep"></div>
+  <div class="ctrl-group" style="gap:4px">
+    <span class="key" id="k-plus">+</span>
+    <span class="key-slash">/</span>
+    <span class="key" id="k-minus">−</span>
+    <span class="ctrl-joint" style="margin-left:2px">STEP</span>
+  </div>
+  <div class="ctrl-sep"></div>
+  <div class="ctrl-group"><span class="key" style="width:52px;font-size:9px" id="k-space">SPACE</span><span class="ctrl-joint" style="margin-left:4px">RESET</span></div>
+  <div class="ctrl-sep"></div>
+  <div class="ctrl-group" style="font-size:9px;color:#2a4050;letter-spacing:0.1em">DRAG · ORBIT &nbsp;|&nbsp; SCROLL · ZOOM</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ─── THREE.JS SETUP ────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+renderer.outputEncoding = THREE.sRGBEncoding;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x080a0e);
+scene.fog = new THREE.FogExp2(0x080a0e, 0.0006);
+
+const camera = new THREE.PerspectiveCamera(45, 1, 1, 8000);
+camera.position.set(900, 500, 900);
+camera.lookAt(0, 250, 0);
+
+// ─── RESIZE ────────────────────────────────────────────────────────
+function resize() {
+  const w = canvas.parentElement.clientWidth;
+  const h = canvas.parentElement.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ─── ORBIT CONTROL (lightweight, no import) ────────────────────────
+const orbit = (() => {
+  let dragging = false, last = {x:0,y:0};
+  let theta = 0.65, phi = 0.42, radius = 1400, target = new THREE.Vector3(0,250,0);
+  function apply() {
+    camera.position.set(
+      target.x + radius * Math.sin(phi) * Math.sin(theta),
+      target.y + radius * Math.cos(phi),
+      target.z + radius * Math.sin(phi) * Math.cos(theta)
+    );
+    camera.lookAt(target);
+  }
+  apply();
+  canvas.addEventListener('mousedown', e => { dragging = true; last = {x:e.clientX,y:e.clientY}; });
+  window.addEventListener('mouseup', () => dragging = false);
+  window.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    theta -= (e.clientX - last.x) * 0.005;
+    phi    = Math.max(0.08, Math.min(Math.PI*0.48, phi - (e.clientY - last.y) * 0.005));
+    last = {x:e.clientX,y:e.clientY};
+    apply();
+  });
+  canvas.addEventListener('wheel', e => {
+    radius = Math.max(300, Math.min(3000, radius + e.deltaY * 0.8));
+    apply();
+  }, {passive:true});
+  canvas.addEventListener('touchstart', e => { if(e.touches.length===1){dragging=true;last={x:e.touches[0].clientX,y:e.touches[0].clientY};}});
+  canvas.addEventListener('touchend', () => dragging=false);
+  canvas.addEventListener('touchmove', e => {
+    if(!dragging||e.touches.length!==1)return;
+    theta -= (e.touches[0].clientX-last.x)*0.005;
+    phi = Math.max(0.08,Math.min(Math.PI*0.48,phi-(e.touches[0].clientY-last.y)*0.005));
+    last={x:e.touches[0].clientX,y:e.touches[0].clientY};
+    apply();
+  });
+  return { apply };
+})();
+
+// ─── MATERIALS ─────────────────────────────────────────────────────
+function metalMat(color, roughness=0.25, metalness=0.92, envMapIntensity=1.4) {
+  return new THREE.MeshStandardMaterial({ color, roughness, metalness, envMapIntensity });
+}
+function plasticMat(color, roughness=0.6, metalness=0.0) {
+  return new THREE.MeshStandardMaterial({ color, roughness, metalness });
+}
+
+const MAT = {
+  linkLight:  metalMat(0xc8cdd8, 0.20, 0.94),       // brushed aluminium
+  linkDark:   metalMat(0x2a2d38, 0.30, 0.88),       // anodised dark steel
+  jointRing:  metalMat(0x111318, 0.15, 0.98, 1.8),  // polished housing
+  actuator:   metalMat(0xe05500, 0.40, 0.70),       // orange actuator
+  gripBody:   metalMat(0x1a1d24, 0.35, 0.82),       // dark gripper
+  gripTip:    plasticMat(0x0d3d28, 0.85, 0.0),      // rubber tip (matte green)
+  cable:      plasticMat(0x0a0c10, 0.95, 0.0),      // cable conduit
+  sensorRing: metalMat(0x004488, 0.15, 0.6),        // sensor band
+  floor:      new THREE.MeshStandardMaterial({ color:0x0c0f14, roughness:0.92, metalness:0.12 }),
+  floorLine:  new THREE.LineBasicMaterial({ color:0x1a2230, transparent:true, opacity:0.5 }),
+  trail:      new THREE.LineBasicMaterial({ color:0x00ff9d, transparent:true, opacity:0.7, vertexColors:false }),
+  wsBubble:   new THREE.MeshStandardMaterial({ color:0x0044aa, wireframe:true, transparent:true, opacity:0.04 }),
+};
+
+// ─── FAKE ENV MAP (procedural gradient cube) ───────────────────────
+function buildEnvMap() {
+  const size = 64;
+  const data = new Uint8Array(size * size * 4 * 6);
+  const colors = [
+    [0x18,0x22,0x30],[0x08,0x10,0x18],[0x14,0x1e,0x2c],
+    [0x08,0x10,0x18],[0x20,0x28,0x38],[0x06,0x0a,0x12]
+  ];
+  for (let f = 0; f < 6; f++) {
+    const [r,g,b] = colors[f];
+    for (let i = 0; i < size*size; i++) {
+      const off = (f*size*size + i)*4;
+      const t = (i/size)|0;
+      const blend = t/size;
+      data[off]   = r + (blend * 30)|0;
+      data[off+1] = g + (blend * 40)|0;
+      data[off+2] = b + (blend * 60)|0;
+      data[off+3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  tex.needsUpdate = true;
+  // Add a couple of bright hotspots for specular pop
+  const envTex = new THREE.PMREMGenerator(renderer).fromEquirectangular(tex).texture;
+  tex.dispose();
+  return envTex;
+}
+const envMap = buildEnvMap();
+scene.environment = envMap;
+Object.values(MAT).forEach(m => { if(m.envMap !== undefined) m.envMap = envMap; });
+
+// ─── LIGHTING ──────────────────────────────────────────────────────
+// Key light (warm, top-right)
+const keyLight = new THREE.DirectionalLight(0xfff5e8, 2.8);
+keyLight.position.set(600, 900, 500);
+keyLight.castShadow = true;
+keyLight.shadow.mapSize.set(2048, 2048);
+keyLight.shadow.camera.near = 10;
+keyLight.shadow.camera.far  = 3000;
+keyLight.shadow.camera.left = keyLight.shadow.camera.bottom = -600;
+keyLight.shadow.camera.right = keyLight.shadow.camera.top  =  600;
+keyLight.shadow.bias = -0.0003;
+scene.add(keyLight);
+
+// Fill (cool blue, left)
+const fillLight = new THREE.DirectionalLight(0x204870, 0.9);
+fillLight.position.set(-500, 300, -400);
+scene.add(fillLight);
+
+// Rim light (back, tight)
+const rimLight = new THREE.DirectionalLight(0x00aaff, 0.5);
+rimLight.position.set(-100, 200, -700);
+scene.add(rimLight);
+
+// Bounce (under, very dark warm)
+const bounceLight = new THREE.HemisphereLight(0x101820, 0x060810, 0.6);
+scene.add(bounceLight);
+
+// Ground accent (small orange practical light at base)
+const practicalLight = new THREE.PointLight(0xff6600, 0.6, 300, 2);
+practicalLight.position.set(0, 40, 0);
+scene.add(practicalLight);
+
+// ─── DH PARAMETERS ─────────────────────────────────────────────────
+const DH = {
+  a:     [0,   250,  220,    0,    0,    0  ],
+  d:     [230,   0,    0,  180,    0,   80  ],
+  alpha: [Math.PI/2, 0, 0, Math.PI/2, -Math.PI/2, 0],
+};
+const JLIM = [[-170,170],[-90,90],[-135,135],[-180,180],[-90,90],[-180,180]];
+
+// Joint state
+let angles = [0, -20, 60, 0, 30, 0];
+const STEP_SIZES = [1, 5, 10];
+let stepIdx = 1;
+
+// ─── FORWARD KINEMATICS ─────────────────────────────────────────────
+function fk(angs) {
+  const T = new THREE.Matrix4();
+  const frames = [];
+  const origins = [new THREE.Vector3(0,0,0)];
+  for (let i = 0; i < 6; i++) {
+    const th = THREE.MathUtils.degToRad(angs[i]);
+    const a = DH.a[i], d = DH.d[i], al = DH.alpha[i];
+    const ct=Math.cos(th), st=Math.sin(th), ca=Math.cos(al), sa=Math.sin(al);
+    const Ti = new THREE.Matrix4().set(
+      ct,-st*ca, st*sa, a*ct,
+      st, ct*ca,-ct*sa, a*st,
+       0,    sa,    ca,    d,
+       0,     0,     0,    1
+    );
+    T.multiply(Ti);
+    const clone = T.clone();
+    frames.push(clone);
+    const pos = new THREE.Vector3().setFromMatrixPosition(clone);
+    origins.push(pos);
+  }
+  return { frames, origins };
+}
+
+// ─── GEOMETRY HELPERS ──────────────────────────────────────────────
+function makeTube(from, to, rTop, rBot, segs=20, mat) {
+  const dir = to.clone().sub(from);
+  const len = dir.length();
+  if (len < 0.5) return null;
+
+  const geo = new THREE.CylinderGeometry(rBot, rTop, len, segs, 1, false);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+
+  // align cylinder (default along Y) to direction
+  const axis = new THREE.Vector3(0,1,0);
+  const normDir = dir.clone().normalize();
+  const q = new THREE.Quaternion().setFromUnitVectors(axis, normDir);
+  mesh.quaternion.copy(q);
+  mesh.position.copy(from).addScaledVector(normDir, len/2);
+  return mesh;
+}
+
+function makeSphere(pos, r, mat, segs=24) {
+  const geo = new THREE.SphereGeometry(r, segs, segs);
+  const m = new THREE.Mesh(geo, mat);
+  m.castShadow = true;
+  m.position.copy(pos);
+  return m;
+}
+
+function makeDisc(pos, frame, r, h, mat, segs=32) {
+  const geo = new THREE.CylinderGeometry(r, r, h, segs);
+  const m = new THREE.Mesh(geo, mat);
+  m.castShadow = true;
+  m.receiveShadow = true;
+  m.position.copy(pos);
+  m.quaternion.setFromRotationMatrix(frame);
+  return m;
+}
+
+function makeTorus(pos, frame, r, tube, mat, segs=40, tubeSegs=12) {
+  const geo = new THREE.TorusGeometry(r, tube, tubeSegs, segs);
+  const m = new THREE.Mesh(geo, mat);
+  m.position.copy(pos);
+  m.quaternion.setFromRotationMatrix(frame);
+  return m;
+}
+
+function makeBox(pos, frame, w, h, d, mat) {
+  const geo = new THREE.BoxGeometry(w, h, d);
+  const m = new THREE.Mesh(geo, mat);
+  m.castShadow = true;
+  m.receiveShadow = true;
+  m.position.copy(pos);
+  m.quaternion.setFromRotationMatrix(frame);
+  return m;
+}
+
+function addBolts(group, pos, frame, radius, n, boltR=3) {
+  for (let k = 0; k < n; k++) {
+    const ang = (k/n)*Math.PI*2;
+    const localOff = new THREE.Vector3(Math.cos(ang)*radius, 0, Math.sin(ang)*radius);
+    const R = new THREE.Matrix3().setFromMatrix4(frame);
+    localOff.applyMatrix3(R);
+    const bpos = pos.clone().add(localOff);
+    const bolt = makeSphere(bpos, boltR, MAT.linkDark, 8);
+    group.add(bolt);
+  }
+}
+
+// ─── FLOOR ─────────────────────────────────────────────────────────
+function buildFloor(scene) {
+  // Solid plate
+  const plate = new THREE.Mesh(
+    new THREE.PlaneGeometry(2400, 2400),
+    MAT.floor
+  );
+  plate.rotation.x = -Math.PI/2;
+  plate.receiveShadow = true;
+  scene.add(plate);
+
+  // Grid lines
+  const gs = 80, n = 16;
+  for (let i = -n; i <= n; i++) {
+    const pts1 = [new THREE.Vector3(i*gs,1,-n*gs), new THREE.Vector3(i*gs,1,n*gs)];
+    const pts2 = [new THREE.Vector3(-n*gs,1,i*gs), new THREE.Vector3(n*gs,1,i*gs)];
+    [pts1,pts2].forEach(pts => {
+      const geo = new THREE.BufferGeometry().setFromPoints(pts);
+      scene.add(new THREE.Line(geo, MAT.floorLine));
+    });
+  }
+
+  // Glowing origin cross
+  const crossMat = new THREE.LineBasicMaterial({color:0x00c8ff,transparent:true,opacity:0.25});
+  [[[-200,0,0],[200,0,0]],[[0,0,-200],[0,0,200]]].forEach(pts => {
+    const geo = new THREE.BufferGeometry().setFromPoints(pts.map(p=>new THREE.Vector3(...p)));
+    scene.add(new THREE.Line(geo, crossMat));
+  });
+}
+
+// ─── PEDESTAL ──────────────────────────────────────────────────────
+function buildPedestal(scene) {
+  const g = new THREE.Group();
+  const layers = [
+    {r:90,  h:20, y:10,  mat:metalMat(0x1a1c22,0.30,0.85)},
+    {r:75,  h:22, y:31,  mat:metalMat(0x222530,0.25,0.88)},
+    {r:58,  h:22, y:52,  mat:metalMat(0x2a2e3a,0.20,0.90)},
+    {r:44,  h:24, y:74,  mat:metalMat(0x303545,0.18,0.92)},
+  ];
+  layers.forEach(({r,h,y,mat}) => {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(r,r*1.08,h,40), mat);
+    m.position.y = y;
+    m.castShadow = true;
+    m.receiveShadow = true;
+    g.add(m);
+  });
+
+  // Top mounting ring (bright)
+  const ring = makeTorus(new THREE.Vector3(0,88,0), new THREE.Matrix4(), 38, 3, metalMat(0x6080a0,0.1,0.95));
+  g.add(ring);
+
+  // Bolt circle
+  addBolts(g, new THREE.Vector3(0,82,0), new THREE.Matrix4(), 70, 6, 4);
+
+  // Orange LED ring at base
+  const ledMat = new THREE.MeshStandardMaterial({color:0xff5500,emissive:0xff3300,emissiveIntensity:1.5,roughness:1,metalness:0});
+  const led = makeTorus(new THREE.Vector3(0,10,0), new THREE.Matrix4(), 85, 2, ledMat);
+  g.add(led);
+
+  scene.add(g);
+}
+
+// ─── WORKSPACE BUBBLE ─────────────────────────────────────────────
+let wsBubble = null;
+function buildWorkspaceBubble(reach) {
+  if (wsBubble) scene.remove(wsBubble);
+  const geo = new THREE.SphereGeometry(reach, 24, 18);
+  wsBubble = new THREE.Mesh(geo, MAT.wsBubble);
+  wsBubble.position.y = 90;
+  scene.add(wsBubble);
+}
+
+// ─── ARM GROUP ─────────────────────────────────────────────────────
+let armGroup = new THREE.Group();
+scene.add(armGroup);
+
+const LINK_R = {
+  start: [42, 28, 22, 16, 13, 10],
+  end:   [28, 22, 16, 13, 10,  8],
+};
+const JOINT_R = [46, 34, 28, 22, 20, 16];
+const LINK_MAT = [MAT.linkLight, MAT.linkDark, MAT.linkLight, MAT.linkDark, MAT.linkLight, MAT.linkDark];
+
+function buildArm(angs) {
+  // Remove old
+  while (armGroup.children.length) armGroup.remove(armGroup.children[0]);
+
+  const { frames, origins } = fk(angs);
+
+  for (let i = 0; i < 6; i++) {
+    const p1 = origins[i];
+    const p2 = origins[i+1];
+    const frame = frames[i];
+    const mat = LINK_MAT[i];
+    const jr  = JOINT_R[i];
+
+    // ── Link body (tapered tube) ──────────────────────────────
+    const tube = makeTube(p1, p2, LINK_R.start[i], LINK_R.end[i], 20, mat);
+    if (tube) armGroup.add(tube);
+
+    // ── Cable conduit stripe along link ───────────────────────
+    {
+      const dir = p2.clone().sub(p1);
+      const len = dir.length();
+      if (len > 10) {
+        // compute a side offset from frame X axis
+        const sideAxis = new THREE.Vector3().setFromMatrixColumn(frame, 0).normalize();
+        const offset = sideAxis.multiplyScalar(LINK_R.start[i] + 4);
+        const pts = [];
+        for (let t = 0.08; t <= 0.92; t += 0.03) {
+          pts.push(p1.clone().add(offset).addScaledVector(dir.normalize(), t*len));
+        }
+        const geo = new THREE.BufferGeometry().setFromPoints(pts);
+        const line = new THREE.Line(geo, new THREE.LineBasicMaterial({color:0x0a0e16,linewidth:1}));
+        armGroup.add(line);
+      }
+    }
+
+    // ── Joint housing (flanged discs) ─────────────────────────
+    // Outer dark housing disc
+    const disc1 = makeDisc(p1, frame, jr, jr*0.55, MAT.jointRing, 32);
+    armGroup.add(disc1);
+
+    // Inner lighter disc
+    const disc2 = makeDisc(p1, frame, jr*0.68, jr*0.9, LINK_MAT[i], 32);
+    armGroup.add(disc2);
+
+    // Outer flange torus ring
+    const tor = makeTorus(p1, frame, jr, 2.5, metalMat(0x5a6070,0.12,0.96), 40, 10);
+    armGroup.add(tor);
+
+    // Actuator accent ring (orange for alternating joints)
+    if (i % 2 === 1) {
+      const acRing = makeTorus(p1, frame, jr*0.55, 4, MAT.actuator, 32, 8);
+      armGroup.add(acRing);
+    }
+
+    // Bolts
+    addBolts(armGroup, p1, frame, jr*0.82, 6, 3.5);
+
+    // Joint glow sphere (tiny point light contribution)
+    // We simulate by adding a small emissive sphere
+    const glowMat = new THREE.MeshStandardMaterial({
+      color: i%2===0 ? 0x003366 : 0x662200,
+      emissive: i%2===0 ? 0x0044aa : 0xff4400,
+      emissiveIntensity: 0.8,
+      roughness: 1, metalness: 0
+    });
+    const glow = makeSphere(p1, 4, glowMat, 8);
+    armGroup.add(glow);
+  }
+
+  // ── Wrist spherical housing (J5/J6 zone) ─────────────────────
+  {
+    const wristPos = origins[5];
+    const wMat = metalMat(0x303848, 0.18, 0.92);
+    const wGeo = new THREE.SphereGeometry(26, 24, 16,  0, Math.PI*2,  0, Math.PI*0.65);
+    const wMesh = new THREE.Mesh(wGeo, wMat);
+    wMesh.castShadow = true;
+    wMesh.position.copy(wristPos);
+    wMesh.quaternion.setFromRotationMatrix(frames[4]);
+    armGroup.add(wMesh);
+
+    // equatorial ring
+    const eqR = makeTorus(wristPos, frames[4], 26, 2.5, metalMat(0x607080,0.1,0.96), 40, 8);
+    armGroup.add(eqR);
+  }
+
+  // ── End-effector / Gripper ────────────────────────────────────
+  {
+    const eePos = origins[6];
+    const eeFrame = frames[5];
+
+    // Palm housing
+    const palm = makeBox(eePos, eeFrame, 34, 30, 24, MAT.gripBody);
+    armGroup.add(palm);
+
+    // Sensor ring on palm
+    const sensorRing = makeTorus(eePos, eeFrame, 13, 2, MAT.sensorRing, 32, 8);
+    armGroup.add(sensorRing);
+
+    // Sensor emissive ring
+    const sensMat = new THREE.MeshStandardMaterial({color:0x002244,emissive:0x0044aa,emissiveIntensity:1.2,roughness:1,metalness:0});
+    const sensPip = makeTorus(eePos, eeFrame, 13, 1.2, sensMat, 32, 8);
+    armGroup.add(sensPip);
+
+    // Two parallel fingers
+    [-14, 14].forEach(yOff => {
+      const R3 = new THREE.Matrix3().setFromMatrix4(eeFrame);
+      const sideOff = new THREE.Vector3(0, yOff, 0).applyMatrix3(R3);
+      const fBase = eePos.clone().add(sideOff);
+
+      // Finger direction: along Z axis of EE frame
+      const fDir = new THREE.Vector3().setFromMatrixColumn(eeFrame, 2).normalize().negate();
+      const fTip = fBase.clone().addScaledVector(fDir, 60);
+
+      // Finger body
+      const finger = makeTube(fBase, fTip, 7, 5.5, 14, MAT.gripBody);
+      if (finger) armGroup.add(finger);
+
+      // Knuckle joint
+      const knuckle = makeSphere(fBase, 8, MAT.jointRing, 12);
+      armGroup.add(knuckle);
+
+      // Rubber tip pad (last 16mm)
+      const tipStart = fBase.clone().addScaledVector(fDir, 44);
+      const tipEnd   = fBase.clone().addScaledVector(fDir, 60);
+      const tip = makeTube(tipStart, tipEnd, 7, 6, 10, MAT.gripTip);
+      if (tip) armGroup.add(tip);
+
+      // Finger groove lines (detail)
+      [0.3,0.5,0.7].forEach(t => {
+        const gpos = fBase.clone().addScaledVector(fDir, t*60);
+        const ring = makeTorus(gpos, eeFrame, 6.5, 0.8, metalMat(0x101418,0.5,0.7), 16, 6);
+        armGroup.add(ring);
+      });
+    });
+
+    // EE axis indicator (tiny bright sphere at TCP)
+    const tcpMat = new THREE.MeshStandardMaterial({color:0x00ff9d,emissive:0x00ff9d,emissiveIntensity:2.0,roughness:1,metalness:0});
+    const tcpSphere = makeSphere(eePos, 5, tcpMat, 10);
+    armGroup.add(tcpSphere);
+  }
+}
+
+// ─── TRAJECTORY TRAIL ─────────────────────────────────────────────
+const MAX_TRAIL = 200;
+let trailPts = [];
+let trailLine = null;
+
+function updateTrail(pos) {
+  trailPts.unshift(pos.clone());
+  if (trailPts.length > MAX_TRAIL) trailPts.pop();
+
+  if (trailLine) scene.remove(trailLine);
+  if (trailPts.length < 2) return;
+
+  const geo = new THREE.BufferGeometry().setFromPoints(trailPts);
+  trailLine = new THREE.Line(geo, MAT.trail);
+  scene.add(trailLine);
+}
+
+// ─── HUD SETUP ─────────────────────────────────────────────────────
+const JOINT_NAMES = ['Base','Shoulder','Elbow','F-Roll','Wrist','EE-Yaw'];
+const JOINT_KEYS  = [['q','a'],['w','s'],['e','d'],['r','f'],['t','g'],['y','h']];
+const JOINT_COLORS = ['#00c8ff','#ff8040','#00c8ff','#ff8040','#00ff9d','#c080ff'];
+
+const jRowsEl = document.getElementById('joint-rows');
+JOINT_NAMES.forEach((name, i) => {
+  jRowsEl.innerHTML += `
+    <div class="joint-row">
+      <span class="joint-label">${name}</span>
+      <div class="joint-bar-wrap">
+        <div class="joint-bar" id="jbar-${i}" style="background:${JOINT_COLORS[i]};width:50%"></div>
+      </div>
+      <span class="joint-val" id="jval-${i}">  0.0°</span>
+    </div>`;
+});
+
+function updateHUD(angs, eePos) {
+  angs.forEach((a, i) => {
+    const [lo,hi] = JLIM[i];
+    const pct = ((a - lo)/(hi - lo)) * 100;
+    const bar = document.getElementById(`jbar-${i}`);
+    const val = document.getElementById(`jval-${i}`);
+    bar.style.width = pct + '%';
+    val.textContent = (a >= 0 ? '+' : '') + a.toFixed(1) + '°';
+    const abs = Math.abs(a);
+    const lim = Math.abs(lo);
+    val.className = 'joint-val' + (abs > lim*0.9 ? ' limit' : abs > lim*0.7 ? ' warn' : '');
+  });
+  document.getElementById('ee-x').textContent = eePos.x.toFixed(1);
+  document.getElementById('ee-y').textContent = eePos.y.toFixed(1);
+  document.getElementById('ee-z').textContent = eePos.z.toFixed(1);
+  document.getElementById('step-display').textContent = STEP_SIZES[stepIdx] + '°';
+}
+
+// ─── KEYBOARD ─────────────────────────────────────────────────────
+const keyMap = {
+  'q':0,'a':0,'w':1,'s':1,'e':2,'d':2,'r':3,'f':3,'t':4,'g':4,'y':5,'h':5
+};
+const keyDir = {'q':1,'w':1,'e':1,'r':1,'t':1,'y':1,'a':-1,'s':-1,'d':-1,'f':-1,'g':-1,'h':-1};
+const keyIds = {
+  'q':'k-q','a':'k-a','w':'k-w','s':'k-s','e':'k-e','d':'k-d',
+  'r':'k-r','f':'k-f','t':'k-t','g':'k-g','y':'k-y','h':'k-h'
+};
+
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+function flashKey(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.add('active');
+  setTimeout(() => el.classList.remove('active'), 120);
+}
+
+window.addEventListener('keydown', e => {
+  const key = e.key.toLowerCase();
+
+  if (key in keyMap) {
+    e.preventDefault();
+    const j = keyMap[key];
+    const step = STEP_SIZES[stepIdx] * keyDir[key];
+    angles[j] = clamp(angles[j] + step, JLIM[j][0], JLIM[j][1]);
+    flashKey(keyIds[key]);
+    needsRebuild = true;
+  }
+  else if (e.key === '+' || e.key === '=') {
+    stepIdx = Math.min(stepIdx+1, STEP_SIZES.length-1);
+    flashKey('k-plus');
+  }
+  else if (e.key === '-' || e.key === '_') {
+    stepIdx = Math.max(stepIdx-1, 0);
+    flashKey('k-minus');
+  }
+  else if (e.key === ' ') {
+    e.preventDefault();
+    angles = [0,-20,60,0,30,0];
+    trailPts = [];
+    flashKey('k-space');
+    const f = document.getElementById('flash');
+    f.classList.add('show');
+    setTimeout(() => f.classList.remove('show'), 150);
+    needsRebuild = true;
+  }
+});
+
+// ─── INIT ─────────────────────────────────────────────────────────
+buildFloor(scene);
+buildPedestal(scene);
+buildWorkspaceBubble(750);
+buildArm(angles);
+
+let needsRebuild = false;
+
+// Loader fade
+window.addEventListener('load', () => {
+  setTimeout(() => {
+    document.getElementById('loader').classList.add('fade');
+    setTimeout(() => document.getElementById('loader').remove(), 700);
+  }, 600);
+});
+
+// ─── RENDER LOOP ───────────────────────────────────────────────────
+let frame = 0;
+function animate() {
+  requestAnimationFrame(animate);
+  frame++;
+
+  if (needsRebuild) {
+    buildArm(angles);
+    needsRebuild = false;
+
+    const {origins} = fk(angles);
+    const ee = origins[6];
+    updateTrail(ee);
+    updateHUD(angles, ee);
+  }
+
+  // Subtle practical light pulse
+  practicalLight.intensity = 0.55 + 0.05*Math.sin(frame*0.04);
+
+  renderer.render(scene, camera);
+}
+
+// Initial HUD
+const initFk = fk(angles);
+updateHUD(angles, initFk.origins[6]);
+
+animate();
+</script>
+</body>
+</html>
